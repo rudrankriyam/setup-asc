@@ -1,0 +1,208 @@
+name: Setup asc
+description: Install the `asc` CLI (App Store Connect CLI) in GitHub Actions.
+author: Rudrank Riyam
+
+inputs:
+  version:
+    description: Version to install (`latest`, `0.28.12`, `v0.28.12`, or `main`)
+    required: false
+    default: latest
+  cache:
+    description: Cache the downloaded release asset (`true`/`false`)
+    required: false
+    default: "true"
+  install-dir:
+    description: Directory to install `asc` into (defaults to `$RUNNER_TEMP/asc/bin`)
+    required: false
+
+outputs:
+  asc-path:
+    description: Absolute path to the installed `asc` binary
+    value: ${{ steps.install.outputs.asc-path }}
+  asc-version:
+    description: Resolved version that was installed
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        REPO="rudrankriyam/App-Store-Connect-CLI"
+
+        INPUT_VERSION="${{ inputs.version }}"
+        # Allow `v0.28.12` as well as `0.28.12`
+        INPUT_VERSION="${INPUT_VERSION#v}"
+
+        case "${RUNNER_OS}" in
+          Linux) OS="linux" ;;
+          macOS) OS="macOS" ;;
+          Windows) OS="windows" ;;
+          *)
+            echo "Unsupported runner.os: ${RUNNER_OS}" >&2
+            exit 1
+            ;;
+        esac
+
+        case "${RUNNER_ARCH}" in
+          X64) ARCH="amd64" ;;
+          ARM64) ARCH="arm64" ;;
+          *)
+            echo "Unsupported runner.arch: ${RUNNER_ARCH}" >&2
+            exit 1
+            ;;
+        esac
+
+        VERSION="${INPUT_VERSION}"
+        MODE="release"
+
+        if [ -z "${INPUT_VERSION}" ] || [ "${INPUT_VERSION}" = "latest" ]; then
+          # Follow redirect to determine the latest release tag without using the API.
+          LATEST_URL="$(curl -fsSL -o /dev/null -w "%{url_effective}" "https://github.com/${REPO}/releases/latest")"
+          VERSION="${LATEST_URL##*/}"
+          if [ -z "${VERSION}" ] || [ "${VERSION}" = "latest" ]; then
+            echo "Could not determine latest version." >&2
+            exit 1
+          fi
+        elif [ "${INPUT_VERSION}" = "main" ]; then
+          MODE="go"
+        fi
+
+        echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
+        echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+        echo "os=${OS}" >> "${GITHUB_OUTPUT}"
+        echo "arch=${ARCH}" >> "${GITHUB_OUTPUT}"
+
+        if [ "${MODE}" = "release" ]; then
+          ASSET="asc_${VERSION}_${OS}_${ARCH}"
+          BIN_NAME="asc"
+          if [ "${OS}" = "windows" ]; then
+            ASSET="${ASSET}.exe"
+            BIN_NAME="asc.exe"
+          fi
+
+          BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+          echo "asset=${ASSET}" >> "${GITHUB_OUTPUT}"
+          echo "bin-name=${BIN_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "bin-url=${BASE_URL}/${ASSET}" >> "${GITHUB_OUTPUT}"
+          echo "checksums-url=${BASE_URL}/asc_${VERSION}_checksums.txt" >> "${GITHUB_OUTPUT}"
+        fi
+
+    - name: Restore cached download
+      if: ${{ steps.resolve.outputs.mode == 'release' && inputs.cache == 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/setup-asc-cache
+        key: setup-asc-${{ steps.resolve.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - id: download
+      if: ${{ steps.resolve.outputs.mode == 'release' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        CACHE_ROOT="${RUNNER_TEMP}/setup-asc-cache"
+        DOWNLOAD_DIR="${CACHE_ROOT}/${{ steps.resolve.outputs.version }}/${{ steps.resolve.outputs.os }}-${{ steps.resolve.outputs.arch }}"
+        mkdir -p "${DOWNLOAD_DIR}"
+
+        ASSET="${{ steps.resolve.outputs.asset }}"
+        BIN_URL="${{ steps.resolve.outputs.bin-url }}"
+        CHECKSUMS_URL="${{ steps.resolve.outputs.checksums-url }}"
+
+        if [ ! -f "${DOWNLOAD_DIR}/${ASSET}" ]; then
+          echo "Downloading ${ASSET}..."
+          curl -fsSL "${BIN_URL}" -o "${DOWNLOAD_DIR}/${ASSET}"
+        else
+          echo "Using cached ${ASSET}"
+        fi
+
+        if [ ! -f "${DOWNLOAD_DIR}/checksums.txt" ]; then
+          curl -fsSL "${CHECKSUMS_URL}" -o "${DOWNLOAD_DIR}/checksums.txt"
+        fi
+
+        echo "download-dir=${DOWNLOAD_DIR}" >> "${GITHUB_OUTPUT}"
+
+    - name: Verify checksums
+      if: ${{ steps.resolve.outputs.mode == 'release' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        DIR="${{ steps.download.outputs.download-dir }}"
+        FILE="${DIR}/${{ steps.resolve.outputs.asset }}"
+        CHECKSUMS="${DIR}/checksums.txt"
+
+        PY="python3"
+        if ! command -v python3 >/dev/null 2>&1; then
+          PY="python"
+        fi
+
+        "${PY}" - "${FILE}" "${CHECKSUMS}" <<'PYEOF'
+import hashlib
+import sys
+from pathlib import Path
+
+asset = Path(sys.argv[1])
+checksums = Path(sys.argv[2])
+
+expected = None
+for line in checksums.read_text().splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    if line.endswith(asset.name):
+        expected = line.split()[0]
+        break
+
+if not expected:
+    print(f"Checksum for {asset.name} not found in checksums file", file=sys.stderr)
+    sys.exit(1)
+
+actual = hashlib.sha256(asset.read_bytes()).hexdigest()
+if actual != expected:
+    print("Checksum verification failed", file=sys.stderr)
+    print(f"Expected: {expected}", file=sys.stderr)
+    print(f"Actual:   {actual}", file=sys.stderr)
+    sys.exit(1)
+
+print("Checksum verified.")
+PYEOF
+
+    - name: Setup Go (main install)
+      if: ${{ steps.resolve.outputs.mode == 'go' }}
+      uses: actions/setup-go@v5
+      with:
+        go-version: stable
+
+    - id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        INSTALL_DIR="${{ inputs.install-dir }}"
+        if [ -z "${INSTALL_DIR}" ]; then
+          INSTALL_DIR="${RUNNER_TEMP}/asc/bin"
+        fi
+        mkdir -p "${INSTALL_DIR}"
+
+        if [ "${{ steps.resolve.outputs.mode }}" = "go" ]; then
+          # Install from main using go install (requires Go).
+          GOBIN="${INSTALL_DIR}" go install github.com/rudrankriyam/App-Store-Connect-CLI@main
+          BIN_PATH="${INSTALL_DIR}/asc"
+        else
+          DIR="${{ steps.download.outputs.download-dir }}"
+          cp "${DIR}/${{ steps.resolve.outputs.asset }}" "${INSTALL_DIR}/${{ steps.resolve.outputs.bin-name }}"
+          chmod +x "${INSTALL_DIR}/${{ steps.resolve.outputs.bin-name }}" || true
+          BIN_PATH="${INSTALL_DIR}/${{ steps.resolve.outputs.bin-name }}"
+        fi
+
+        echo "${INSTALL_DIR}" >> "${GITHUB_PATH}"
+        echo "asc-path=${BIN_PATH}" >> "${GITHUB_OUTPUT}"
+        echo "Installed asc at ${BIN_PATH}"
+
+branding:
+  icon: download
+  color: blue

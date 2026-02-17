@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  setup:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: setup
+        uses: ./
+        with:
+          version: latest
+
+      - run: echo "Installed ${{ steps.setup.outputs.asc-path }} (version ${{ steps.setup.outputs.asc-version }})"
+      - run: asc --help
+
