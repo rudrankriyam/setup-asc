@@ -156,16 +156,16 @@ runs:
         FILE="${DIR}/${ASSET}"
         CHECKSUMS="${DIR}/checksums.txt"
 
-        EXPECTED="$(grep -E "[ *]${ASSET}$" "${CHECKSUMS}" | awk '{print $1}')"
+        EXPECTED="$(grep -E "[ *]${ASSET}$" "${CHECKSUMS}" | awk '{print $1}' | tr -d '\\r\\n \\')"
         if [ -z "${EXPECTED}" ]; then
           echo "::error::Checksum for ${ASSET} not found in checksums.txt"
           exit 1
         fi
 
         if command -v shasum >/dev/null 2>&1; then
-          ACTUAL="$(shasum -a 256 "${FILE}" | awk '{print $1}')"
+          ACTUAL="$(shasum -a 256 "${FILE}" | awk '{print $1}' | tr -d '\\r\\n \\')"
         elif command -v sha256sum >/dev/null 2>&1; then
-          ACTUAL="$(sha256sum "${FILE}" | awk '{print $1}')"
+          ACTUAL="$(sha256sum "${FILE}" | awk '{print $1}' | tr -d '\\r\\n \\')"
         else
           echo "::warning::No checksum tool available (shasum/sha256sum). Skipping verification."
           echo "::endgroup::"
