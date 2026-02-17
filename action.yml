@@ -1,32 +1,40 @@
 name: Setup asc
-description: Install the `asc` CLI (App Store Connect CLI) in GitHub Actions.
+description: Install the asc CLI (App Store Connect CLI) in GitHub Actions.
 author: Rudrank Riyam
 
 inputs:
   version:
-    description: Version to install (`latest`, `0.28.12`, `v0.28.12`, or `main`)
+    description: "Version to install: latest, 0.28.12, v0.28.12, or main"
     required: false
     default: latest
   cache:
-    description: Cache the downloaded release asset (`true`/`false`)
+    description: "Cache the downloaded release asset (true/false)"
     required: false
     default: "true"
   install-dir:
-    description: Directory to install `asc` into (defaults to `$RUNNER_TEMP/asc/bin`)
+    description: "Directory to install asc into (defaults to $RUNNER_TEMP/asc/bin)"
     required: false
+  token:
+    description: "GitHub token for API requests (avoids rate limits when resolving latest)"
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   asc-path:
-    description: Absolute path to the installed `asc` binary
+    description: Absolute path to the installed asc binary
     value: ${{ steps.install.outputs.asc-path }}
   asc-version:
     description: Resolved version that was installed
     value: ${{ steps.resolve.outputs.version }}
+  cache-hit:
+    description: Whether the binary was restored from cache
+    value: ${{ steps.cache.outputs.cache-hit }}
 
 runs:
   using: composite
   steps:
-    - id: resolve
+    - name: Resolve version and platform
+      id: resolve
       shell: bash
       run: |
         set -euo pipefail
@@ -34,24 +42,24 @@ runs:
         REPO="rudrankriyam/App-Store-Connect-CLI"
 
         INPUT_VERSION="${{ inputs.version }}"
-        # Allow `v0.28.12` as well as `0.28.12`
+        # Strip leading 'v' so both v0.28.12 and 0.28.12 work
         INPUT_VERSION="${INPUT_VERSION#v}"
 
         case "${RUNNER_OS}" in
-          Linux) OS="linux" ;;
-          macOS) OS="macOS" ;;
+          Linux)   OS="linux" ;;
+          macOS)   OS="macOS" ;;
           Windows) OS="windows" ;;
           *)
-            echo "Unsupported runner.os: ${RUNNER_OS}" >&2
+            echo "::error::Unsupported runner OS: ${RUNNER_OS}"
             exit 1
             ;;
         esac
 
         case "${RUNNER_ARCH}" in
-          X64) ARCH="amd64" ;;
+          X64)   ARCH="amd64" ;;
           ARM64) ARCH="arm64" ;;
           *)
-            echo "Unsupported runner.arch: ${RUNNER_ARCH}" >&2
+            echo "::error::Unsupported runner arch: ${RUNNER_ARCH}"
             exit 1
             ;;
         esac
@@ -60,15 +68,20 @@ runs:
         MODE="release"
 
         if [ -z "${INPUT_VERSION}" ] || [ "${INPUT_VERSION}" = "latest" ]; then
-          # Follow redirect to determine the latest release tag without using the API.
-          LATEST_URL="$(curl -fsSL -o /dev/null -w "%{url_effective}" "https://github.com/${REPO}/releases/latest")"
+          echo "::group::Resolving latest version"
+          LATEST_URL="$(curl -fsSL -o /dev/null -w "%{url_effective}" \
+            -H "Authorization: token ${{ inputs.token }}" \
+            "https://github.com/${REPO}/releases/latest")"
           VERSION="${LATEST_URL##*/}"
           if [ -z "${VERSION}" ] || [ "${VERSION}" = "latest" ]; then
-            echo "Could not determine latest version." >&2
+            echo "::error::Could not determine latest version"
             exit 1
           fi
+          echo "Resolved latest: ${VERSION}"
+          echo "::endgroup::"
         elif [ "${INPUT_VERSION}" = "main" ]; then
           MODE="go"
+          VERSION="main"
         fi
 
         echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
@@ -91,18 +104,23 @@ runs:
           echo "checksums-url=${BASE_URL}/asc_${VERSION}_checksums.txt" >> "${GITHUB_OUTPUT}"
         fi
 
-    - name: Restore cached download
+        echo "::notice::Installing asc ${VERSION} (${OS}/${ARCH}, mode=${MODE})"
+
+    - name: Restore cached binary
+      id: cache
       if: ${{ steps.resolve.outputs.mode == 'release' && inputs.cache == 'true' }}
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/setup-asc-cache
         key: setup-asc-${{ steps.resolve.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
 
-    - id: download
+    - name: Download release binary
+      id: download
       if: ${{ steps.resolve.outputs.mode == 'release' }}
       shell: bash
       run: |
         set -euo pipefail
+        echo "::group::Download"
 
         CACHE_ROOT="${RUNNER_TEMP}/setup-asc-cache"
         DOWNLOAD_DIR="${CACHE_ROOT}/${{ steps.resolve.outputs.version }}/${{ steps.resolve.outputs.os }}-${{ steps.resolve.outputs.arch }}"
@@ -112,11 +130,11 @@ runs:
         BIN_URL="${{ steps.resolve.outputs.bin-url }}"
         CHECKSUMS_URL="${{ steps.resolve.outputs.checksums-url }}"
 
-        if [ ! -f "${DOWNLOAD_DIR}/${ASSET}" ]; then
+        if [ -f "${DOWNLOAD_DIR}/${ASSET}" ]; then
+          echo "Using cached ${ASSET}"
+        else
           echo "Downloading ${ASSET}..."
           curl -fsSL "${BIN_URL}" -o "${DOWNLOAD_DIR}/${ASSET}"
-        else
-          echo "Using cached ${ASSET}"
         fi
 
         if [ ! -f "${DOWNLOAD_DIR}/checksums.txt" ]; then
@@ -124,63 +142,56 @@ runs:
         fi
 
         echo "download-dir=${DOWNLOAD_DIR}" >> "${GITHUB_OUTPUT}"
+        echo "::endgroup::"
 
-    - name: Verify checksums
+    - name: Verify SHA-256 checksum
       if: ${{ steps.resolve.outputs.mode == 'release' }}
       shell: bash
       run: |
         set -euo pipefail
+        echo "::group::Verify checksum"
 
         DIR="${{ steps.download.outputs.download-dir }}"
-        FILE="${DIR}/${{ steps.resolve.outputs.asset }}"
+        ASSET="${{ steps.resolve.outputs.asset }}"
+        FILE="${DIR}/${ASSET}"
         CHECKSUMS="${DIR}/checksums.txt"
 
-        PY="python3"
-        if ! command -v python3 >/dev/null 2>&1; then
-          PY="python"
+        EXPECTED="$(grep -E "[ *]${ASSET}$" "${CHECKSUMS}" | awk '{print $1}')"
+        if [ -z "${EXPECTED}" ]; then
+          echo "::error::Checksum for ${ASSET} not found in checksums.txt"
+          exit 1
         fi
 
-        "${PY}" - "${FILE}" "${CHECKSUMS}" <<-'PYEOF'
-        	import hashlib
-        	import sys
-        	from pathlib import Path
+        if command -v shasum >/dev/null 2>&1; then
+          ACTUAL="$(shasum -a 256 "${FILE}" | awk '{print $1}')"
+        elif command -v sha256sum >/dev/null 2>&1; then
+          ACTUAL="$(sha256sum "${FILE}" | awk '{print $1}')"
+        else
+          echo "::warning::No checksum tool available (shasum/sha256sum). Skipping verification."
+          echo "::endgroup::"
+          exit 0
+        fi
 
-        	asset = Path(sys.argv[1])
-        	checksums = Path(sys.argv[2])
+        if [ "${EXPECTED}" != "${ACTUAL}" ]; then
+          echo "::error::Checksum verification failed. Expected ${EXPECTED}, got ${ACTUAL}"
+          exit 1
+        fi
 
-        	expected = None
-        	for line in checksums.read_text().splitlines():
-        	    line = line.strip()
-        	    if not line:
-        	        continue
-        	    if line.endswith(asset.name):
-        	        expected = line.split()[0]
-        	        break
+        echo "Checksum verified: ${ACTUAL}"
+        echo "::endgroup::"
 
-        	if not expected:
-        	    print(f"Checksum for {asset.name} not found in checksums file", file=sys.stderr)
-        	    sys.exit(1)
-
-        	actual = hashlib.sha256(asset.read_bytes()).hexdigest()
-        	if actual != expected:
-        	    print("Checksum verification failed", file=sys.stderr)
-        	    print(f"Expected: {expected}", file=sys.stderr)
-        	    print(f"Actual:   {actual}", file=sys.stderr)
-        	    sys.exit(1)
-
-        	print("Checksum verified.")
-        	PYEOF
-
-    - name: Setup Go (main install)
+    - name: Setup Go (main branch install)
       if: ${{ steps.resolve.outputs.mode == 'go' }}
       uses: actions/setup-go@v5
       with:
         go-version: stable
 
-    - id: install
+    - name: Install asc
+      id: install
       shell: bash
       run: |
         set -euo pipefail
+        echo "::group::Install"
 
         INSTALL_DIR="${{ inputs.install-dir }}"
         if [ -z "${INSTALL_DIR}" ]; then
@@ -189,7 +200,6 @@ runs:
         mkdir -p "${INSTALL_DIR}"
 
         if [ "${{ steps.resolve.outputs.mode }}" = "go" ]; then
-          # Install from main using go install (requires Go).
           GOBIN="${INSTALL_DIR}" go install github.com/rudrankriyam/App-Store-Connect-CLI@main
           BIN_PATH="${INSTALL_DIR}/asc"
         else
@@ -201,8 +211,9 @@ runs:
 
         echo "${INSTALL_DIR}" >> "${GITHUB_PATH}"
         echo "asc-path=${BIN_PATH}" >> "${GITHUB_OUTPUT}"
-        echo "Installed asc at ${BIN_PATH}"
+        echo "Installed asc ${{ steps.resolve.outputs.version }} at ${BIN_PATH}"
+        echo "::endgroup::"
 
 branding:
-  icon: download
+  icon: terminal
   color: blue

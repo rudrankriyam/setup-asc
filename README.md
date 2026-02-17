@@ -1,5 +1,7 @@
 # setup-asc
 
+[![CI](https://github.com/rudrankriyam/setup-asc/actions/workflows/ci.yml/badge.svg)](https://github.com/rudrankriyam/setup-asc/actions/workflows/ci.yml)
+
 GitHub Action to install [`asc`](https://github.com/rudrankriyam/App-Store-Connect-CLI) (App Store Connect CLI) in CI.
 
 ## Usage
@@ -8,8 +10,6 @@ Install the latest release:
 
 ```yaml
 - uses: rudrankriyam/setup-asc@v1
-  with:
-    version: latest
 
 - run: asc --help
 ```
@@ -32,16 +32,22 @@ Install from `main` (builds from source via `go install`, slower but useful for 
 
 ## Inputs
 
-- `version` (default: `latest`): `latest`, `0.28.12`, `v0.28.12`, or `main`
-- `cache` (default: `true`): cache the downloaded release asset
-- `install-dir` (optional): where to install `asc` (defaults to `$RUNNER_TEMP/asc/bin`)
+| Input | Default | Description |
+|-------|---------|-------------|
+| `version` | `latest` | `latest`, `0.28.12`, `v0.28.12`, or `main` |
+| `cache` | `true` | Cache the downloaded release asset |
+| `token` | `${{ github.token }}` | GitHub token (avoids API rate limits) |
+| `install-dir` | `$RUNNER_TEMP/asc/bin` | Directory to install `asc` into |
 
 ## Outputs
 
-- `asc-path`: absolute path to the installed binary
-- `asc-version`: resolved version that was installed
+| Output | Description |
+|--------|-------------|
+| `asc-path` | Absolute path to the installed binary |
+| `asc-version` | Resolved version that was installed |
+| `cache-hit` | Whether the binary was restored from cache |
 
-## Example (with auth env vars)
+## Authentication
 
 This action only installs `asc`. For auth, use GitHub Actions secrets + env vars:
 
@@ -49,7 +55,6 @@ This action only installs `asc`. For auth, use GitHub Actions secrets + env vars
 env:
   ASC_BYPASS_KEYCHAIN: "1"
   ASC_NO_UPDATE: "1"
-  # Optional default app ID (lets you omit --app on many commands)
   ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
   ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
   ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -61,12 +66,9 @@ steps:
   - run: asc apps list --paginate
 ```
 
-## Example Workflows (Copy/Paste)
+## Example Workflows
 
-These examples assume you have:
-
-- `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY_B64` stored as GitHub Actions secrets
-- `ASC_BYPASS_KEYCHAIN=1` in CI (so `asc` never tries to use macOS Keychain)
+These examples assume `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_PRIVATE_KEY_B64` are stored as GitHub Actions secrets.
 
 ### Publish to TestFlight (Upload + Distribute to Group)
 
@@ -92,12 +94,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: rudrankriyam/setup-asc@v1
 
-      # Build your IPA however you like (Xcode Cloud, xcodebuild, Fastlane, etc)
-      # Then run:
-      - name: Upload + distribute
+      # Build your IPA however you like (xcodebuild, Xcode Cloud, etc.)
+      # Then distribute:
+      - name: Upload and distribute
         run: |
           asc publish testflight \
-            --ipa "./path/to/app.ipa" \
+            --ipa "./build/MyApp.ipa" \
             --group "Internal,External" \
             --wait \
             --notify
@@ -109,7 +111,7 @@ Notes:
 
 ### Send Latest Build to a TestFlight Group (No Upload)
 
-If your build is already uploaded by Xcode Cloud / another pipeline, you can just attach the latest build to a beta group.
+If your build is already uploaded by Xcode Cloud or another pipeline, just attach the latest build to a beta group.
 
 ```yaml
 name: Add Latest Build to Group
@@ -127,40 +129,37 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
-      GROUP_NAME: "Internal"
     steps:
       - uses: actions/checkout@v4
       - uses: rudrankriyam/setup-asc@v1
 
-      - name: Resolve build + group IDs
-        shell: bash
+      - name: Resolve build and group IDs
         run: |
-          BUILD_ID="$(asc builds latest --app \"$ASC_APP_ID\" --platform IOS | jq -r '.data.id')"
-          GROUP_ID="$(asc testflight beta-groups list --app \"$ASC_APP_ID\" --paginate | jq -r --arg NAME \"$GROUP_NAME\" '.data[] | select(.attributes.name == $NAME) | .id' | head -n 1)"
+          BUILD_ID=$(asc builds latest --platform IOS | jq -r '.data.id')
+          GROUP_ID=$(asc testflight beta-groups list --paginate \
+            | jq -r '.data[] | select(.attributes.name == "Internal") | .id' \
+            | head -n 1)
 
-          if [ -z \"$BUILD_ID\" ] || [ \"$BUILD_ID\" = \"null\" ]; then
-            echo \"No build found\" >&2
+          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" = "null" ]; then
+            echo "::error::No build found"
             exit 1
           fi
-          if [ -z \"$GROUP_ID\" ] || [ \"$GROUP_ID\" = \"null\" ]; then
-            echo \"Group not found: $GROUP_NAME\" >&2
-            echo \"Available groups:\" >&2
-            asc testflight beta-groups list --app \"$ASC_APP_ID\" --output table >&2
+          if [ -z "$GROUP_ID" ] || [ "$GROUP_ID" = "null" ]; then
+            echo "::error::Group 'Internal' not found"
+            asc testflight beta-groups list --output table >&2
             exit 1
           fi
 
-          echo \"BUILD_ID=$BUILD_ID\" >> \"$GITHUB_ENV\"
-          echo \"GROUP_ID=$GROUP_ID\" >> \"$GITHUB_ENV\"
+          echo "BUILD_ID=$BUILD_ID" >> "$GITHUB_ENV"
+          echo "GROUP_ID=$GROUP_ID" >> "$GITHUB_ENV"
 
       - name: Add group to build
-        run: |
-          asc builds add-groups --build \"$BUILD_ID\" --group \"$GROUP_ID\"
+        run: asc builds add-groups --build "$BUILD_ID" --group "$GROUP_ID"
 ```
 
 ### Update App Store Metadata (Localizations)
 
-`asc localizations upload` uses `.strings` files and needs an **App Store version ID**.
-This workflow resolves the version ID from a version string (e.g. `1.2.3`), validates your localizations, then uploads them.
+Resolves the version ID from a version string, validates localizations, then uploads.
 
 ```yaml
 name: Upload Localizations
@@ -187,32 +186,29 @@ jobs:
       - uses: rudrankriyam/setup-asc@v1
 
       - name: Resolve version ID
-        shell: bash
         run: |
-          VERSION_ID="$(asc versions list --app \"$ASC_APP_ID\" --version \"${{ inputs.version }}\" --limit 1 | jq -r '.data[0].id')"
-          if [ -z \"$VERSION_ID\" ] || [ \"$VERSION_ID\" = \"null\" ]; then
-            echo \"No App Store version found for ${{ inputs.version }}\" >&2
-            echo \"Available versions:\" >&2
-            asc versions list --app \"$ASC_APP_ID\" --output table >&2
+          VERSION_ID=$(asc versions list \
+            --version "${{ inputs.version }}" \
+            --limit 1 \
+            | jq -r '.data[0].id')
+          if [ -z "$VERSION_ID" ] || [ "$VERSION_ID" = "null" ]; then
+            echo "::error::No App Store version found for ${{ inputs.version }}"
+            asc versions list --output table >&2
             exit 1
           fi
-          echo \"VERSION_ID=$VERSION_ID\" >> \"$GITHUB_ENV\"
+          echo "VERSION_ID=$VERSION_ID" >> "$GITHUB_ENV"
 
       - name: Validate localizations (dry run)
-        run: |
-          asc localizations upload --version \"$VERSION_ID\" --path \"./localizations\" --dry-run
+        run: asc localizations upload --version "$VERSION_ID" --path "./localizations" --dry-run
 
       - name: Upload localizations
-        run: |
-          asc localizations upload --version \"$VERSION_ID\" --path \"./localizations\"
+        run: asc localizations upload --version "$VERSION_ID" --path "./localizations"
 ```
 
-Tip: you can generate `./localizations` initially via:
+Tip: generate `./localizations` initially via:
 `asc localizations download --version "VERSION_ID" --path "./localizations"`
 
-### Publish to App Store (Upload + Attach + Optional Submit)
-
-This uses `asc publish appstore` to upload an IPA, attach it to an App Store version, and optionally submit it.
+### Publish to App Store (Upload + Submit)
 
 ```yaml
 name: Publish to App Store
@@ -242,20 +238,20 @@ jobs:
       - uses: actions/checkout@v4
       - uses: rudrankriyam/setup-asc@v1
 
-      # Build your IPA, then run:
-      - name: Upload + attach build
+      # Build your IPA, then:
+      - name: Upload and attach build
         if: ${{ inputs.submit != 'true' }}
         run: |
           asc publish appstore \
-            --ipa "./path/to/app.ipa" \
+            --ipa "./build/MyApp.ipa" \
             --version "${{ inputs.version }}" \
             --wait
 
-      - name: Upload + submit for review
+      - name: Upload and submit for review
         if: ${{ inputs.submit == 'true' }}
         run: |
           asc publish appstore \
-            --ipa "./path/to/app.ipa" \
+            --ipa "./build/MyApp.ipa" \
             --version "${{ inputs.version }}" \
             --submit \
             --confirm \
@@ -264,5 +260,6 @@ jobs:
 
 ## Security
 
-For release installs, the action downloads `asc_<version>_checksums.txt` from GitHub Releases and verifies the SHA-256 checksum before installing the binary.
-
+- Release binaries are verified against `asc_<version>_checksums.txt` (SHA-256) before installation
+- The `token` input is used only for resolving the latest release tag and is never logged
+- No secrets are read or stored by this action; authentication is handled entirely via environment variables

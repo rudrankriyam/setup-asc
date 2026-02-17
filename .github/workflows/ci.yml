@@ -6,7 +6,8 @@ on:
   pull_request:
 
 jobs:
-  setup:
+  setup-latest:
+    name: "latest (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -20,6 +21,46 @@ jobs:
         with:
           version: latest
 
-      - run: echo "Installed ${{ steps.setup.outputs.asc-path }} (version ${{ steps.setup.outputs.asc-version }})"
-      - run: asc --help
+      - name: Verify install
+        shell: bash
+        run: |
+          echo "Path: ${{ steps.setup.outputs.asc-path }}"
+          echo "Version: ${{ steps.setup.outputs.asc-version }}"
+          asc version
+          asc --help
 
+  setup-pinned:
+    name: "pinned (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: setup
+        uses: ./
+        with:
+          version: 0.28.12
+
+      - name: Verify pinned version
+        shell: bash
+        run: |
+          INSTALLED="$(asc version 2>&1 || true)"
+          echo "Installed: ${INSTALLED}"
+          asc --help
+
+  setup-no-cache:
+    name: "no-cache (ubuntu-latest)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        with:
+          version: latest
+          cache: "false"
+
+      - name: Verify install
+        run: asc version
