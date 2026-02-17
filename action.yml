@@ -140,36 +140,36 @@ runs:
           PY="python"
         fi
 
-        "${PY}" - "${FILE}" "${CHECKSUMS}" <<'PYEOF'
-import hashlib
-import sys
-from pathlib import Path
+        "${PY}" - "${FILE}" "${CHECKSUMS}" <<-'PYEOF'
+        	import hashlib
+        	import sys
+        	from pathlib import Path
 
-asset = Path(sys.argv[1])
-checksums = Path(sys.argv[2])
+        	asset = Path(sys.argv[1])
+        	checksums = Path(sys.argv[2])
 
-expected = None
-for line in checksums.read_text().splitlines():
-    line = line.strip()
-    if not line:
-        continue
-    if line.endswith(asset.name):
-        expected = line.split()[0]
-        break
+        	expected = None
+        	for line in checksums.read_text().splitlines():
+        	    line = line.strip()
+        	    if not line:
+        	        continue
+        	    if line.endswith(asset.name):
+        	        expected = line.split()[0]
+        	        break
 
-if not expected:
-    print(f"Checksum for {asset.name} not found in checksums file", file=sys.stderr)
-    sys.exit(1)
+        	if not expected:
+        	    print(f"Checksum for {asset.name} not found in checksums file", file=sys.stderr)
+        	    sys.exit(1)
 
-actual = hashlib.sha256(asset.read_bytes()).hexdigest()
-if actual != expected:
-    print("Checksum verification failed", file=sys.stderr)
-    print(f"Expected: {expected}", file=sys.stderr)
-    print(f"Actual:   {actual}", file=sys.stderr)
-    sys.exit(1)
+        	actual = hashlib.sha256(asset.read_bytes()).hexdigest()
+        	if actual != expected:
+        	    print("Checksum verification failed", file=sys.stderr)
+        	    print(f"Expected: {expected}", file=sys.stderr)
+        	    print(f"Actual:   {actual}", file=sys.stderr)
+        	    sys.exit(1)
 
-print("Checksum verified.")
-PYEOF
+        	print("Checksum verified.")
+        	PYEOF
 
     - name: Setup Go (main install)
       if: ${{ steps.resolve.outputs.mode == 'go' }}
