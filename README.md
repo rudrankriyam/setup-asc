@@ -210,6 +210,58 @@ jobs:
 Tip: you can generate `./localizations` initially via:
 `asc localizations download --version "VERSION_ID" --path "./localizations"`
 
+### Publish to App Store (Upload + Attach + Optional Submit)
+
+This uses `asc publish appstore` to upload an IPA, attach it to an App Store version, and optionally submit it.
+
+```yaml
+name: Publish to App Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "App Store version string (e.g., 1.2.3)"
+        required: true
+      submit:
+        description: "Submit for review (true/false)"
+        required: true
+        default: "false"
+
+jobs:
+  appstore:
+    runs-on: macos-latest
+    env:
+      ASC_BYPASS_KEYCHAIN: "1"
+      ASC_NO_UPDATE: "1"
+      ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rudrankriyam/setup-asc@v1
+
+      # Build your IPA, then run:
+      - name: Upload + attach build
+        if: ${{ inputs.submit != 'true' }}
+        run: |
+          asc publish appstore \
+            --ipa "./path/to/app.ipa" \
+            --version "${{ inputs.version }}" \
+            --wait
+
+      - name: Upload + submit for review
+        if: ${{ inputs.submit == 'true' }}
+        run: |
+          asc publish appstore \
+            --ipa "./path/to/app.ipa" \
+            --version "${{ inputs.version }}" \
+            --submit \
+            --confirm \
+            --wait
+```
+
 ## Security
 
 For release installs, the action downloads `asc_<version>_checksums.txt` from GitHub Releases and verifies the SHA-256 checksum before installing the binary.
