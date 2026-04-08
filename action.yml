@@ -7,6 +7,9 @@ inputs:
     description: "Version to install: latest, 0.28.12, v0.28.12, or main"
     required: false
     default: latest
+  sha:
+    description: "Exact commit SHA to install via go install (overrides version)"
+    required: false
   cache:
     description: "Cache the downloaded release asset (true/false)"
     required: false
@@ -41,6 +44,7 @@ runs:
 
         REPO="rudrankriyam/App-Store-Connect-CLI"
 
+        INPUT_SHA="${{ inputs.sha }}"
         INPUT_VERSION="${{ inputs.version }}"
         # Strip leading 'v' so both v0.28.12 and 0.28.12 work
         INPUT_VERSION="${INPUT_VERSION#v}"
@@ -67,7 +71,10 @@ runs:
         VERSION="${INPUT_VERSION}"
         MODE="release"
 
-        if [ -z "${INPUT_VERSION}" ] || [ "${INPUT_VERSION}" = "latest" ]; then
+        if [ -n "${INPUT_SHA}" ]; then
+          MODE="go"
+          VERSION="${INPUT_SHA}"
+        elif [ -z "${INPUT_VERSION}" ] || [ "${INPUT_VERSION}" = "latest" ]; then
           echo "::group::Resolving latest version"
           LATEST_URL="$(curl -fsSL -o /dev/null -w "%{url_effective}" \
             -H "Authorization: token ${{ inputs.token }}" \
@@ -200,7 +207,7 @@ runs:
         mkdir -p "${INSTALL_DIR}"
 
         if [ "${{ steps.resolve.outputs.mode }}" = "go" ]; then
-          GOBIN="${INSTALL_DIR}" go install github.com/rudrankriyam/App-Store-Connect-CLI@main
+          GOBIN="${INSTALL_DIR}" go install github.com/rudrankriyam/App-Store-Connect-CLI@${{ steps.resolve.outputs.version }}
           BIN_PATH="${INSTALL_DIR}/asc"
         else
           DIR="${{ steps.download.outputs.download-dir }}"
