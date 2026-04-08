@@ -208,7 +208,16 @@ runs:
 
         if [ "${{ steps.resolve.outputs.mode }}" = "go" ]; then
           GOBIN="${INSTALL_DIR}" go install github.com/rudrankriyam/App-Store-Connect-CLI@${{ steps.resolve.outputs.version }}
-          BIN_PATH="${INSTALL_DIR}/asc"
+          # go install names the binary after the module's last path element
+          # (App-Store-Connect-CLI), not 'asc'. Normalize it.
+          BIN_NAME="asc"
+          if [ "${{ steps.resolve.outputs.os }}" = "windows" ]; then BIN_NAME="asc.exe"; fi
+          if [ ! -f "${INSTALL_DIR}/${BIN_NAME}" ]; then
+            INSTALLED="$(ls "${INSTALL_DIR}" | head -1)"
+            mv "${INSTALL_DIR}/${INSTALLED}" "${INSTALL_DIR}/${BIN_NAME}"
+          fi
+          chmod +x "${INSTALL_DIR}/${BIN_NAME}" || true
+          BIN_PATH="${INSTALL_DIR}/${BIN_NAME}"
         else
           DIR="${{ steps.download.outputs.download-dir }}"
           cp "${DIR}/${{ steps.resolve.outputs.asset }}" "${INSTALL_DIR}/${{ steps.resolve.outputs.bin-name }}"
