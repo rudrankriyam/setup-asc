@@ -68,7 +68,6 @@ jobs:
           echo "Path: ${{ steps.setup.outputs.asc-path }}"
           echo "Version: ${{ steps.setup.outputs.asc-version }}"
           asc version
-          asc --help
 
   setup-no-cache:
     name: "no-cache (ubuntu-latest)"
