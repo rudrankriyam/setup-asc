@@ -109,7 +109,7 @@ runs:
     - name: Restore cached binary
       id: cache
       if: ${{ steps.resolve.outputs.mode == 'release' && inputs.cache == 'true' }}
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/setup-asc-cache
         key: setup-asc-${{ steps.resolve.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
