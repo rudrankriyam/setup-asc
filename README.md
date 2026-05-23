@@ -30,12 +30,12 @@ Install from `main` (builds from source via `go install`, slower but useful for 
     version: main
 ```
 
-Install a specific commit SHA (builds from source via `go install`):
+Install a specific full commit SHA (builds from source via `go install`):
 
 ```yaml
 - uses: rudrankriyam/setup-asc@v1
   with:
-    sha: abc1234def5678...
+    sha: 23619c9fd56e150104079b8a7fd1b17b396e99ce
 ```
 
 ## Inputs
@@ -43,7 +43,7 @@ Install a specific commit SHA (builds from source via `go install`):
 | Input | Default | Description |
 |-------|---------|-------------|
 | `version` | `latest` | `latest`, `0.28.12`, `v0.28.12`, or `main` |
-| `sha` | | Exact commit SHA to install via `go install` (overrides `version`) |
+| `sha` | | Full 40-character commit SHA to install via `go install` (overrides `version`) |
 | `cache` | `true` | Cache the downloaded release asset |
 | `token` | `${{ github.token }}` | GitHub token (avoids API rate limits) |
 | `install-dir` | `$RUNNER_TEMP/asc/bin` | Directory to install `asc` into |

@@ -69,6 +69,44 @@ jobs:
           echo "Version: ${{ steps.setup.outputs.asc-version }}"
           asc version
 
+  setup-main:
+    name: "main (ubuntu-latest)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: setup
+        uses: ./
+        with:
+          version: main
+
+      - name: Verify main install
+        shell: bash
+        run: |
+          echo "Path: ${{ steps.setup.outputs.asc-path }}"
+          echo "Version: ${{ steps.setup.outputs.asc-version }}"
+          asc version
+
+  setup-invalid-sha:
+    name: "invalid sha (ubuntu-latest)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: setup
+        continue-on-error: true
+        uses: ./
+        with:
+          sha: abc1234def5678
+
+      - name: Verify invalid sha fails
+        shell: bash
+        run: |
+          if [ "${{ steps.setup.outcome }}" != "failure" ]; then
+            echo "::error::Invalid sha should fail validation"
+            exit 1
+          fi
+
   setup-no-cache:
     name: "no-cache (ubuntu-latest)"
     runs-on: ubuntu-latest
