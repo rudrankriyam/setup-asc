@@ -7,6 +7,9 @@ inputs:
     description: "Version to install: latest, 0.28.12, v0.28.12, or main"
     required: false
     default: latest
+  sha:
+    description: "Exact commit SHA to install via go install (overrides version)"
+    required: false
   cache:
     description: "Cache the downloaded release asset (true/false)"
     required: false
@@ -36,12 +39,15 @@ runs:
     - name: Resolve version and platform
       id: resolve
       shell: bash
+      env:
+        INPUT_SHA: ${{ inputs.sha }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
 
         REPO="rudrankriyam/App-Store-Connect-CLI"
 
-        INPUT_VERSION="${{ inputs.version }}"
         # Strip leading 'v' so both v0.28.12 and 0.28.12 work
         INPUT_VERSION="${INPUT_VERSION#v}"
 
@@ -67,10 +73,17 @@ runs:
         VERSION="${INPUT_VERSION}"
         MODE="release"
 
-        if [ -z "${INPUT_VERSION}" ] || [ "${INPUT_VERSION}" = "latest" ]; then
+        if [ -n "${INPUT_SHA}" ]; then
+          if ! [[ "${INPUT_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::sha must be a full 40-character commit SHA"
+            exit 1
+          fi
+          MODE="go"
+          VERSION="${INPUT_SHA}"
+        elif [ -z "${INPUT_VERSION}" ] || [ "${INPUT_VERSION}" = "latest" ]; then
           echo "::group::Resolving latest version"
           LATEST_URL="$(curl -fsSL -o /dev/null -w "%{url_effective}" \
-            -H "Authorization: token ${{ inputs.token }}" \
+            -H "Authorization: token ${INPUT_TOKEN}" \
             "https://github.com/${REPO}/releases/latest")"
           VERSION="${LATEST_URL##*/}"
           if [ -z "${VERSION}" ] || [ "${VERSION}" = "latest" ]; then
@@ -118,17 +131,24 @@ runs:
       id: download
       if: ${{ steps.resolve.outputs.mode == 'release' }}
       shell: bash
+      env:
+        RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+        RESOLVED_OS: ${{ steps.resolve.outputs.os }}
+        RESOLVED_ARCH: ${{ steps.resolve.outputs.arch }}
+        RESOLVED_ASSET: ${{ steps.resolve.outputs.asset }}
+        RESOLVED_BIN_URL: ${{ steps.resolve.outputs.bin-url }}
+        RESOLVED_CHECKSUMS_URL: ${{ steps.resolve.outputs.checksums-url }}
       run: |
         set -euo pipefail
         echo "::group::Download"
 
         CACHE_ROOT="${RUNNER_TEMP}/setup-asc-cache"
-        DOWNLOAD_DIR="${CACHE_ROOT}/${{ steps.resolve.outputs.version }}/${{ steps.resolve.outputs.os }}-${{ steps.resolve.outputs.arch }}"
+        DOWNLOAD_DIR="${CACHE_ROOT}/${RESOLVED_VERSION}/${RESOLVED_OS}-${RESOLVED_ARCH}"
         mkdir -p "${DOWNLOAD_DIR}"
 
-        ASSET="${{ steps.resolve.outputs.asset }}"
-        BIN_URL="${{ steps.resolve.outputs.bin-url }}"
-        CHECKSUMS_URL="${{ steps.resolve.outputs.checksums-url }}"
+        ASSET="${RESOLVED_ASSET}"
+        BIN_URL="${RESOLVED_BIN_URL}"
+        CHECKSUMS_URL="${RESOLVED_CHECKSUMS_URL}"
 
         if [ -f "${DOWNLOAD_DIR}/${ASSET}" ]; then
           echo "Using cached ${ASSET}"
@@ -147,12 +167,15 @@ runs:
     - name: Verify SHA-256 checksum
       if: ${{ steps.resolve.outputs.mode == 'release' }}
       shell: bash
+      env:
+        DOWNLOAD_DIR: ${{ steps.download.outputs.download-dir }}
+        RESOLVED_ASSET: ${{ steps.resolve.outputs.asset }}
       run: |
         set -euo pipefail
         echo "::group::Verify checksum"
 
-        DIR="${{ steps.download.outputs.download-dir }}"
-        ASSET="${{ steps.resolve.outputs.asset }}"
+        DIR="${DOWNLOAD_DIR}"
+        ASSET="${RESOLVED_ASSET}"
         FILE="${DIR}/${ASSET}"
         CHECKSUMS="${DIR}/checksums.txt"
 
@@ -189,29 +212,53 @@ runs:
     - name: Install asc
       id: install
       shell: bash
+      env:
+        INSTALL_DIR_INPUT: ${{ inputs.install-dir }}
+        RESOLVED_MODE: ${{ steps.resolve.outputs.mode }}
+        RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+        RESOLVED_OS: ${{ steps.resolve.outputs.os }}
+        DOWNLOAD_DIR: ${{ steps.download.outputs.download-dir }}
+        RESOLVED_ASSET: ${{ steps.resolve.outputs.asset }}
+        RESOLVED_BIN_NAME: ${{ steps.resolve.outputs.bin-name }}
       run: |
         set -euo pipefail
         echo "::group::Install"
 
-        INSTALL_DIR="${{ inputs.install-dir }}"
+        INSTALL_DIR="${INSTALL_DIR_INPUT}"
         if [ -z "${INSTALL_DIR}" ]; then
           INSTALL_DIR="${RUNNER_TEMP}/asc/bin"
         fi
         mkdir -p "${INSTALL_DIR}"
 
-        if [ "${{ steps.resolve.outputs.mode }}" = "go" ]; then
-          GOBIN="${INSTALL_DIR}" go install github.com/rudrankriyam/App-Store-Connect-CLI@main
-          BIN_PATH="${INSTALL_DIR}/asc"
+        if [ "${RESOLVED_MODE}" = "go" ]; then
+          GOBIN="${INSTALL_DIR}" go install github.com/rudrankriyam/App-Store-Connect-CLI@${RESOLVED_VERSION}
+          # go install names the binary after the module's last path element
+          # (App-Store-Connect-CLI), not 'asc'. Normalize it.
+          BIN_NAME="asc"
+          GO_BIN_NAME="App-Store-Connect-CLI"
+          if [ "${RESOLVED_OS}" = "windows" ]; then
+            BIN_NAME="asc.exe"
+            GO_BIN_NAME="App-Store-Connect-CLI.exe"
+          fi
+          if [ ! -f "${INSTALL_DIR}/${BIN_NAME}" ]; then
+            if [ ! -f "${INSTALL_DIR}/${GO_BIN_NAME}" ]; then
+              echo "::error::Expected go install output at ${INSTALL_DIR}/${GO_BIN_NAME}"
+              exit 1
+            fi
+            mv "${INSTALL_DIR}/${GO_BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+          fi
+          chmod +x "${INSTALL_DIR}/${BIN_NAME}" || true
+          BIN_PATH="${INSTALL_DIR}/${BIN_NAME}"
         else
-          DIR="${{ steps.download.outputs.download-dir }}"
-          cp "${DIR}/${{ steps.resolve.outputs.asset }}" "${INSTALL_DIR}/${{ steps.resolve.outputs.bin-name }}"
-          chmod +x "${INSTALL_DIR}/${{ steps.resolve.outputs.bin-name }}" || true
-          BIN_PATH="${INSTALL_DIR}/${{ steps.resolve.outputs.bin-name }}"
+          DIR="${DOWNLOAD_DIR}"
+          cp "${DIR}/${RESOLVED_ASSET}" "${INSTALL_DIR}/${RESOLVED_BIN_NAME}"
+          chmod +x "${INSTALL_DIR}/${RESOLVED_BIN_NAME}" || true
+          BIN_PATH="${INSTALL_DIR}/${RESOLVED_BIN_NAME}"
         fi
 
         echo "${INSTALL_DIR}" >> "${GITHUB_PATH}"
         echo "asc-path=${BIN_PATH}" >> "${GITHUB_OUTPUT}"
-        echo "Installed asc ${{ steps.resolve.outputs.version }} at ${BIN_PATH}"
+        echo "Installed asc ${RESOLVED_VERSION} at ${BIN_PATH}"
         echo "::endgroup::"
 
 branding:
