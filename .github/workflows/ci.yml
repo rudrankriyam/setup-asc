@@ -6,6 +6,16 @@ on:
   pull_request:
 
 jobs:
+  checksum-fail-closed:
+    name: "checksum fail closed"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify missing checksum tooling fails closed
+        shell: bash
+        run: tests/checksum-fail-closed.bash
+
   setup-latest:
     name: "latest (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
