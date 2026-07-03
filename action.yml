@@ -82,10 +82,20 @@ runs:
           VERSION="${INPUT_SHA}"
         elif [ -z "${INPUT_VERSION}" ] || [ "${INPUT_VERSION}" = "latest" ]; then
           echo "::group::Resolving latest version"
-          LATEST_URL="$(curl -fsSL -o /dev/null -w "%{url_effective}" \
-            -H "Authorization: token ${INPUT_TOKEN}" \
-            "https://github.com/${REPO}/releases/latest")"
-          VERSION="${LATEST_URL##*/}"
+          API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+          if [ -n "${INPUT_TOKEN}" ]; then
+            RELEASE_JSON="$(curl -fsSL \
+              -H "Authorization: Bearer ${INPUT_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API_URL}")"
+          else
+            RELEASE_JSON="$(curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              "${API_URL}")"
+          fi
+          VERSION="$(printf '%s\n' "${RELEASE_JSON}" \
+            | grep -m1 '"tag_name"' \
+            | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
           if [ -z "${VERSION}" ] || [ "${VERSION}" = "latest" ]; then
             echo "::error::Could not determine latest version"
             exit 1
@@ -122,7 +132,7 @@ runs:
     - name: Restore cached binary
       id: cache
       if: ${{ steps.resolve.outputs.mode == 'release' && inputs.cache == 'true' }}
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ runner.temp }}/setup-asc-cache
         key: setup-asc-${{ steps.resolve.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -179,16 +189,19 @@ runs:
         FILE="${DIR}/${ASSET}"
         CHECKSUMS="${DIR}/checksums.txt"
 
-        EXPECTED="$(grep -E "[ *]${ASSET}$" "${CHECKSUMS}" | awk '{print $1}' | tr -d '\\r\\n \\')"
+        # Strip CRs first so CRLF checksums files still match the $-anchored grep,
+        # then drop residual whitespace/backslashes (sha256sum escapes some names
+        # by prefixing the hash line with a backslash).
+        EXPECTED="$(tr -d '\r' < "${CHECKSUMS}" | grep -E "[ *]${ASSET}$" | awk '{print $1}' | tr -d '[:space:]\\')"
         if [ -z "${EXPECTED}" ]; then
           echo "::error::Checksum for ${ASSET} not found in checksums.txt"
           exit 1
         fi
 
         if command -v shasum >/dev/null 2>&1; then
-          ACTUAL="$(shasum -a 256 "${FILE}" | awk '{print $1}' | tr -d '\\r\\n \\')"
+          ACTUAL="$(shasum -a 256 "${FILE}" | awk '{print $1}' | tr -d '[:space:]\\')"
         elif command -v sha256sum >/dev/null 2>&1; then
-          ACTUAL="$(sha256sum "${FILE}" | awk '{print $1}' | tr -d '\\r\\n \\')"
+          ACTUAL="$(sha256sum "${FILE}" | awk '{print $1}' | tr -d '[:space:]\\')"
         else
           echo "::error::No SHA-256 checksum tool available. Install shasum or sha256sum on this runner so setup-asc can verify ${ASSET} before installation."
           echo "::endgroup::"
@@ -205,7 +218,7 @@ runs:
 
     - name: Setup Go (main branch install)
       if: ${{ steps.resolve.outputs.mode == 'go' }}
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version: stable
 
@@ -247,12 +260,12 @@ runs:
             fi
             mv "${INSTALL_DIR}/${GO_BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
           fi
-          chmod +x "${INSTALL_DIR}/${BIN_NAME}" || true
+          chmod +x "${INSTALL_DIR}/${BIN_NAME}"
           BIN_PATH="${INSTALL_DIR}/${BIN_NAME}"
         else
           DIR="${DOWNLOAD_DIR}"
           cp "${DIR}/${RESOLVED_ASSET}" "${INSTALL_DIR}/${RESOLVED_BIN_NAME}"
-          chmod +x "${INSTALL_DIR}/${RESOLVED_BIN_NAME}" || true
+          chmod +x "${INSTALL_DIR}/${RESOLVED_BIN_NAME}"
           BIN_PATH="${INSTALL_DIR}/${RESOLVED_BIN_NAME}"
         fi
 
