@@ -190,9 +190,9 @@ runs:
         elif command -v sha256sum >/dev/null 2>&1; then
           ACTUAL="$(sha256sum "${FILE}" | awk '{print $1}' | tr -d '\\r\\n \\')"
         else
-          echo "::warning::No checksum tool available (shasum/sha256sum). Skipping verification."
+          echo "::error::No SHA-256 checksum tool available. Install shasum or sha256sum on this runner so setup-asc can verify ${ASSET} before installation."
           echo "::endgroup::"
-          exit 0
+          exit 1
         fi
 
         if [ "${EXPECTED}" != "${ACTUAL}" ]; then

@@ -270,5 +270,6 @@ jobs:
 ## Security
 
 - Release binaries are verified against `asc_<version>_checksums.txt` (SHA-256) before installation
+- Release installs fail if the runner does not provide `shasum` or `sha256sum`; install one of those tools before using release mode on custom runners
 - The `token` input is used only for resolving the latest release tag and is never logged
 - No secrets are read or stored by this action; authentication is handled entirely via environment variables
