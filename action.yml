@@ -132,7 +132,7 @@ runs:
     - name: Restore cached binary
       id: cache
       if: ${{ steps.resolve.outputs.mode == 'release' && inputs.cache == 'true' }}
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/setup-asc-cache
         key: setup-asc-${{ steps.resolve.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -218,7 +218,7 @@ runs:
 
     - name: Setup Go (main branch install)
       if: ${{ steps.resolve.outputs.mode == 'go' }}
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version: stable
 
